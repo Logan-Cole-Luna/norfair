@@ -2,6 +2,7 @@ from logging import warning
 from typing import Any, Callable, Hashable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
+import cupy as cp
 from rich import print
 
 from norfair.camera_motion import CoordinatesTransformation
@@ -12,7 +13,7 @@ from .distances import (
     get_distance_by_name,
 )
 from .filter import FilterFactory, OptimizedKalmanFilterFactory
-from .utils import validate_points
+from .utils import validate_points, get_array_module
 
 
 class Tracker:
@@ -42,7 +43,7 @@ class Tracker:
          It must be smaller than `hit_counter_max` or otherwise the object would never be initialized.
 
          If set to 0, objects will get returned to the user as soon as they are detected for the first time,
-         which can be problematic as this can result in objects appearing and immediately dissapearing.
+         which can be problematic as this can result in objects appearing and immediately disappearing.
 
          Defaults to `hit_counter_max / 2`
     pointwise_hit_counter_max : int, optional
@@ -93,18 +94,21 @@ class Tracker:
         ] = None,
         reid_distance_threshold: float = 0,
         reid_hit_counter_max: Optional[int] = None,
+        use_gpu: bool = False,
     ):
         self.tracked_objects: Sequence["TrackedObject"] = []
+        self.use_gpu = use_gpu
+        xp = get_array_module(self.use_gpu)
 
         if isinstance(distance_function, str):
-            distance_function = get_distance_by_name(distance_function)
+            distance_function = get_distance_by_name(distance_function, use_gpu=self.use_gpu)
         elif isinstance(distance_function, Callable):
             warning(
                 "You are using a scalar distance function. If you want to speed up the"
                 " tracking process please consider using a vectorized distance"
                 f" function such as {AVAILABLE_VECTORIZED_DISTANCES}."
             )
-            distance_function = ScalarDistance(distance_function)
+            distance_function = ScalarDistance(distance_function, use_gpu=self.use_gpu)
         else:
             raise ValueError(
                 "Argument `distance_function` should be a string or function but is"
@@ -135,7 +139,7 @@ class Tracker:
         self.distance_threshold = distance_threshold
         self.detection_threshold = detection_threshold
         if reid_distance_function is not None:
-            self.reid_distance_function = ScalarDistance(reid_distance_function)
+            self.reid_distance_function = ScalarDistance(reid_distance_function, use_gpu=self.use_gpu)
         else:
             self.reid_distance_function = reid_distance_function
         self.reid_distance_threshold = reid_distance_threshold
@@ -291,12 +295,17 @@ class Tracker:
         candidates: Optional[Union[List["Detection"], List["TrackedObject"]]],
         period: int,
     ):
+        xp = get_array_module(self.use_gpu)
+
         if candidates is not None and len(candidates) > 0:
             distance_matrix = distance_function.get_distances(objects, candidates)
-            if np.isnan(distance_matrix).any():
+            if xp.isnan(distance_matrix).any():
                 raise ValueError(
                     "\nReceived nan values from distance function, please check your distance function for errors!"
                 )
+
+            if self.use_gpu and cp:
+                distance_matrix = cp.asarray(distance_matrix)
 
             # Used just for debugging distance function
             if distance_matrix.any():
@@ -358,10 +367,12 @@ class Tracker:
         to that distance, then taking the second minimum, and so on until we
         reach the distance_threshold.
 
-        This avoids the the algorithm getting cute with us and matching things
+        This avoids the algorithm getting cute with us and matching things
         that shouldn't be matching just for the sake of minimizing the global
         distance, which is what used to happen
         """
+        xp = get_array_module(self.use_gpu)
+
         # NOTE: This implementation is terribly inefficient, but it doesn't
         #       seem to affect the fps at all.
         distance_matrix = distance_matrix.copy()
@@ -482,6 +493,7 @@ class TrackedObject:
         past_detections_length: int,
         reid_hit_counter_max: Optional[int],
         coord_transformations: Optional[CoordinatesTransformation] = None,
+        use_gpu: bool = False,
     ):
         if not isinstance(initial_detection, Detection):
             raise ValueError(
@@ -527,7 +539,8 @@ class TrackedObject:
             self.past_detections: Sequence["Detection"] = []
 
         # Create Kalman Filter
-        self.filter = filter_factory.create_filter(initial_detection.absolute_points)
+        self.filter = filter_factory.create_filter(initial_detection.absolute_points,
+                                                   use_gpu=obj_factory.use_gpu)
         self.dim_z = self.dim_points * self.num_points
         self.label = initial_detection.label
         self.abs_to_rel = None
@@ -563,7 +576,7 @@ class TrackedObject:
         np.ndarray
             An array of shape (self.num_points, self.dim_points) containing the velocity estimate of the object on each axis.
         """
-        return self.filter.x.T.flatten()[self.dim_z :].reshape(-1, self.dim_points)
+        return self.filter.x.T.flatten()[self.dim_z:].reshape(-1, self.dim_points)
 
     @property
     def estimate(self) -> np.ndarray:
@@ -678,7 +691,7 @@ class TrackedObject:
         # low confidence to coordinates (0, 0). And when they then get their first
         # real detection this creates a huge velocity vector in our KalmanFilter
         # and causes the tracker to start with wildly inaccurate estimations which
-        # eventually coverge to the real detections.
+        # eventually converge to the real detections.
         self.filter.x[self.dim_z :][np.logical_not(detected_at_least_once_mask)] = 0
         self.detected_at_least_once_points = np.logical_or(
             self.detected_at_least_once_points, points_over_threshold_mask

@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
-
 import numpy as np
+import cupy as cp
 from filterpy.kalman import KalmanFilter
-
+from .utils import get_array_module
 
 class FilterFactory(ABC):
     """Abstract class representing a generic Filter factory
@@ -11,7 +11,7 @@ class FilterFactory(ABC):
     """
 
     @abstractmethod
-    def create_filter(self, initial_detection: np.ndarray):
+    def create_filter(self, initial_detection: np.ndarray, use_gpu: bool = False):
         pass
 
 
@@ -42,7 +42,7 @@ class FilterPyKalmanFilterFactory(FilterFactory):
         self.Q = Q
         self.P = P
 
-    def create_filter(self, initial_detection: np.ndarray) -> KalmanFilter:
+    def create_filter(self, initial_detection: np.ndarray, use_gpu: bool = False) -> KalmanFilter:
         """
         This method returns a new predictive filter instance with the current setup, to be used by each new [`TrackedObject`][norfair.tracker.TrackedObject] that is created.
         This predictive filter will be used to estimate speed and future positions of the object, to better match the detections during its trajectory.
@@ -58,6 +58,8 @@ class FilterPyKalmanFilterFactory(FilterFactory):
         KalmanFilter
             The kalman filter
         """
+        np = get_array_module(use_gpu)
+
         num_points = initial_detection.shape[0]
         dim_points = initial_detection.shape[1]
         dim_z = dim_points * num_points
@@ -95,7 +97,8 @@ class FilterPyKalmanFilterFactory(FilterFactory):
 
 
 class NoFilter:
-    def __init__(self, dim_x, dim_z):
+    def __init__(self, dim_x, dim_z, use_gpu: bool = False):
+        np = get_array_module(use_gpu)
         self.dim_z = dim_z
         self.x = np.zeros((dim_x, 1))
 
@@ -103,7 +106,7 @@ class NoFilter:
         return
 
     def update(self, detection_points_flatten, R=None, H=None):
-
+        np = get_array_module(self.use_gpu)
         if H is not None:
             diagonal = np.diagonal(H).reshape((self.dim_z, 1))
             one_minus_diagonal = 1 - diagonal
@@ -131,7 +134,9 @@ class NoFilterFactory(FilterFactory):
         _description_
     """
 
-    def create_filter(self, initial_detection: np.ndarray):
+    def create_filter(self, initial_detection: np.ndarray, use_gpu: bool = False):
+        np = get_array_module(use_gpu)
+
         num_points = initial_detection.shape[0]
         dim_points = initial_detection.shape[1]
         dim_z = dim_points * num_points  # flattened positions
@@ -140,6 +145,7 @@ class NoFilterFactory(FilterFactory):
         no_filter = NoFilter(
             dim_x,
             dim_z,
+            use_gpu=use_gpu,
         )
         no_filter.x[:dim_z] = np.expand_dims(initial_detection.flatten(), 0).T
         return no_filter
@@ -155,7 +161,9 @@ class OptimizedKalmanFilter:
         vel_variance=1,
         q=0.1,
         r=4,
+        use_gpu: bool = False,
     ):
+        np = get_array_module(use_gpu)
         self.dim_z = dim_z
         self.x = np.zeros((dim_x, 1))
 
@@ -169,10 +177,11 @@ class OptimizedKalmanFilter:
         self.default_r = r * np.ones((dim_z, 1))
 
     def predict(self):
+        np = get_array_module(self.use_gpu)
         self.x[: self.dim_z] += self.x[self.dim_z :]
 
     def update(self, detection_points_flatten, R=None, H=None):
-
+        np = get_array_module(self.use_gpu)
         if H is not None:
             diagonal = np.diagonal(H).reshape((self.dim_z, 1))
             one_minus_diagonal = 1 - diagonal
@@ -263,7 +272,9 @@ class OptimizedKalmanFilterFactory(FilterFactory):
         self.pos_vel_covariance = pos_vel_covariance
         self.vel_variance = vel_variance
 
-    def create_filter(self, initial_detection: np.ndarray):
+    def create_filter(self, initial_detection: np.ndarray, use_gpu: bool = False):
+        np = get_array_module(use_gpu)
+
         num_points = initial_detection.shape[0]
         dim_points = initial_detection.shape[1]
         dim_z = dim_points * num_points  # flattened positions
@@ -277,6 +288,7 @@ class OptimizedKalmanFilterFactory(FilterFactory):
             vel_variance=self.vel_variance,
             q=self.Q,
             r=self.R,
+            use_gpu=use_gpu,
         )
         custom_filter.x[:dim_z] = np.expand_dims(initial_detection.flatten(), 0).T
 

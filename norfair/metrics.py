@@ -1,5 +1,4 @@
 import os
-
 import numpy as np
 from rich import print
 from rich.progress import track
@@ -14,7 +13,9 @@ except ImportError:
 
     mm = DummyMOTMetricsImport()
     pandas = DummyMOTMetricsImport()
+
 from collections import OrderedDict
+from .utils import get_array_module
 
 
 class InformationFile:
@@ -70,6 +71,7 @@ class PredictionsTextFile:
         Write tracked object information in the output file (for this frame), in the format
         frame_number, id, bb_left, bb_top, bb_width, bb_height, -1, -1, -1, -1
         """
+        xp = get_array_module()
         for obj in predictions:
             frame_str = str(int(frame_number))
             id_str = str(int(obj.id))
@@ -110,8 +112,9 @@ class DetectionFileParser:
         # frame, id, bb_left, bb_top, bb_right, bb_down, conf, x, y, z
         detections_path = os.path.join(input_path, "det/det.txt")
 
-        self.matrix_detections = np.loadtxt(detections_path, dtype="f", delimiter=",")
-        row_order = np.argsort(self.matrix_detections[:, 0])
+        xp = get_array_module()
+        self.matrix_detections = xp.loadtxt(detections_path, dtype="f", delimiter=",")
+        row_order = xp.argsort(self.matrix_detections[:, 0])
         self.matrix_detections = self.matrix_detections[row_order]
         # Coordinates refer to box corners
         self.matrix_detections[:, 4] = (
@@ -133,15 +136,16 @@ class DetectionFileParser:
     def get_dets_from_frame(self, frame_number):
         """this function returns a list of norfair Detections class, corresponding to frame=frame_number"""
 
-        indexes = np.argwhere(self.matrix_detections[:, 0] == frame_number)
+        xp = get_array_module()
+        indexes = xp.argwhere(self.matrix_detections[:, 0] == frame_number)
         detections = []
         if len(indexes) > 0:
             actual_det = self.matrix_detections[indexes]
             actual_det.shape = [actual_det.shape[0], actual_det.shape[2]]
             for det in actual_det:
-                points = np.array([[det[2], det[3]], [det[4], det[5]]])
+                points = xp.array([[det[2], det[3]], [det[4], det[5]]])
                 conf = det[6]
-                new_detection = Detection(points, np.array([conf, conf]))
+                new_detection = Detection(points, xp.array([conf, conf]))
                 detections.append(new_detection)
         self.actual_detections = detections
         return detections
@@ -188,6 +192,7 @@ class Accumulators:
         )
 
     def update(self, predictions=None):
+        xp = get_array_module()
         # Get the tracked boxes from this frame in an array
         for obj in predictions:
             new_row = [
@@ -202,10 +207,10 @@ class Accumulators:
                 -1,
                 -1,
             ]
-            if np.shape(self.matrix_predictions)[0] == 0:
+            if xp.shape(self.matrix_predictions)[0] == 0:
                 self.matrix_predictions = new_row
             else:
-                self.matrix_predictions = np.vstack((self.matrix_predictions, new_row))
+                self.matrix_predictions = xp.vstack((self.matrix_predictions, new_row))
         self.frame_number += 1
         # Advance in progress bar
         try:
@@ -268,6 +273,7 @@ def load_motchallenge(matrix_data, min_confidence=-1):
         The dataframe is indexed by ('FrameId', 'Id')
     """
 
+    xp = get_array_module()
     df = pd.DataFrame(
         data=matrix_data,
         columns=[

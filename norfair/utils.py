@@ -4,11 +4,15 @@ from logging import warn
 from typing import Sequence, Tuple
 
 import numpy as np
+import cupy as cp
 from rich import print
 from rich.console import Console
 from rich.table import Table
 
+def get_array_module(use_gpu: bool):
+    return cp if use_gpu and cp else np
 
+#make use cupy
 def validate_points(points: np.ndarray) -> np.array:
     # If the user is tracking only a single point, reformat it slightly.
     if len(points.shape) == 1:

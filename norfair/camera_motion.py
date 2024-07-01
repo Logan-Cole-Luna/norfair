@@ -5,6 +5,7 @@ from logging import warning
 from typing import Optional, Tuple
 
 import numpy as np
+import cupy as cp
 
 try:
     import cv2
@@ -12,6 +13,7 @@ except ImportError:
     from .utils import DummyOpenCVImport
 
     cv2 = DummyOpenCVImport()
+from .utils import get_array_module
 
 
 #
@@ -104,6 +106,8 @@ class TranslationTransformationGetter(TransformationGetter):
     def __call__(
         self, curr_pts: np.ndarray, prev_pts: np.ndarray
     ) -> Tuple[bool, TranslationTransformation]:
+        np = get_array_module(cp.is_available())
+
         # get flow
         flow = curr_pts - prev_pts
 
@@ -216,6 +220,7 @@ class HomographyTransformationGetter(TransformationGetter):
     def __call__(
         self, curr_pts: np.ndarray, prev_pts: np.ndarray
     ) -> Tuple[bool, Optional[HomographyTransformation]]:
+        np = get_array_module(cp.is_available())
 
         if not (
             isinstance(prev_pts, np.ndarray)
@@ -269,6 +274,8 @@ def _get_sparse_flow(
     mask=None,
     quality_level=0.01,
 ):
+    np = get_array_module(cp.is_available())
+
     if prev_pts is None:
         # get points
         prev_pts = cv2.goodFeaturesToTrack(
